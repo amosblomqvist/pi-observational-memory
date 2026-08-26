@@ -57,7 +57,9 @@ export function buildWorkerArgv(opts: {
 	if (opts.model.thinking) args.push("--thinking", opts.model.thinking);
 	args.push("-e", opts.agentExtensionPath ?? AGENT_EXTENSION_PATH);
 	args.push("-n", opts.sessionName);
-	args.push("-p", opts.kickoffPrompt);
+	// spawn() rejects arguments containing NUL bytes; corrupted model
+	// output in a chunk can leave one, which crashes the observer.
+	args.push("-p", opts.kickoffPrompt.replace(/\0/g, ""));
 	return [pi.command, ...args];
 }
 
