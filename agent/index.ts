@@ -7,8 +7,9 @@
  * system prompt is fully replaced with the role prompt, and the role registers only the tools
  * it needs. Output is handed back to the orchestrator via the result file (see src/spawn/runs.ts).
  *
- * Chunk delivery: the orchestrator passes the conversation chunk as the `pi -p` prompt, so it
- * is recorded as a real user message. We deliberately do NOT inject it via the `context` hook
+ * Chunk delivery: the orchestrator writes the conversation chunk to a per-run prompt file and
+ * passes it through pi's `-p @file` support, so it is recorded as a real user message without
+ * risking OS argv-size limits. We deliberately do NOT inject it via the `context` hook
  * — that is non-destructive and never persists to the session, which would leave the chunk
  * invisible when inspecting/resuming the observer run and defeat the observability goal
  * (decision 11). The system prompt carries role + rules only.

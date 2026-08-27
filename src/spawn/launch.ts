@@ -40,7 +40,7 @@ export function resolvePiBinary(): { command: string; baseArgs: string[] } {
 export function buildWorkerArgv(opts: {
 	model: ConfiguredModel;
 	sessionName: string;
-	kickoffPrompt: string;
+	kickoffPromptPath: string;
 	agentExtensionPath?: string;
 }): string[] {
 	const pi = resolvePiBinary();
@@ -57,7 +57,9 @@ export function buildWorkerArgv(opts: {
 	if (opts.model.thinking) args.push("--thinking", opts.model.thinking);
 	args.push("-e", opts.agentExtensionPath ?? AGENT_EXTENSION_PATH);
 	args.push("-n", opts.sessionName);
-	args.push("-p", opts.kickoffPrompt);
+	// `-p` is a boolean flag when followed by an @file argument. Pi reads the prompt from disk,
+	// keeping arbitrarily large serialized transcript chunks out of the process argument list.
+	args.push("-p", `@${opts.kickoffPromptPath}`);
 	return [pi.command, ...args];
 }
 
@@ -111,9 +113,8 @@ export type ObserverLaunchEnv = {
 };
 
 /**
- * Build the env a worker subprocess needs to write its result file. The chunk itself is NOT
- * passed via env/file — it is the `pi -p` prompt (recorded user message) so the run stays
- * faithfully inspectable on resume.
+ * Build the env a worker subprocess needs to write its result file. The chunk is loaded by pi
+ * from an `@file` CLI argument and still becomes the worker's recorded user message.
  */
 export function buildWorkerEnv(role: "observer" | "consolidator", opts: ObserverLaunchEnv): NodeJS.ProcessEnv {
 	return {

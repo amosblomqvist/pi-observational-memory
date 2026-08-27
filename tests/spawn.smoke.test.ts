@@ -1,17 +1,24 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { AGENT_EXTENSION_PATH, buildWorkerArgv, buildWorkerEnv, modelArg } from "../src/spawn/launch.js";
-import { readObserverResult, runResultPath, runsDir, writeObserverResult } from "../src/spawn/runs.js";
+import {
+	readObserverResult,
+	runPromptPath,
+	runResultPath,
+	runsDir,
+	writeObserverResult,
+	writeWorkerPrompt,
+} from "../src/spawn/runs.js";
 import { registerObserverTool } from "../agent/observer/tool.js";
 
 describe("launch argv + env", () => {
 	const model = { provider: "anthropic" as const, id: "claude-sonnet-4-6", thinking: "low" as const };
 
 	it("builds the headless yt-edit-style flag set", () => {
-		const argv = buildWorkerArgv({ model, sessionName: "om-observer-x", kickoffPrompt: "go" });
+		const argv = buildWorkerArgv({ model, sessionName: "om-observer-x", kickoffPromptPath: "/tmp/run.prompt.md" });
 		expect(argv).toContain("--no-extensions");
 		expect(argv).toContain("--no-builtin-tools");
 		expect(argv).toContain("--no-skills");
@@ -21,12 +28,17 @@ describe("launch argv + env", () => {
 		expect(argv[argv.indexOf("--thinking") + 1]).toBe("low");
 		expect(argv[argv.indexOf("-e") + 1]).toBe(AGENT_EXTENSION_PATH);
 		expect(argv[argv.indexOf("-n") + 1]).toBe("om-observer-x");
-		expect(argv[argv.indexOf("-p") + 1]).toBe("go");
+		expect(argv[argv.indexOf("-p") + 1]).toBe("@/tmp/run.prompt.md");
+		expect(argv).not.toContain("go");
 		expect(AGENT_EXTENSION_PATH.endsWith("/agent/index.ts")).toBe(true);
 	});
 
 	it("omits --thinking when no level is configured", () => {
-		const argv = buildWorkerArgv({ model: { provider: "x", id: "y" }, sessionName: "n", kickoffPrompt: "p" });
+		const argv = buildWorkerArgv({
+			model: { provider: "x", id: "y" },
+			sessionName: "n",
+			kickoffPromptPath: "/tmp/prompt",
+		});
 		expect(argv).not.toContain("--thinking");
 	});
 
@@ -39,7 +51,7 @@ describe("launch argv + env", () => {
 		const env = buildWorkerEnv("observer", { memoryRoot, runId: "r1" });
 		expect(env.OM_WORKER).toBe("observer");
 		expect(env.OM_RUN_ID).toBe("r1");
-		// Chunk travels as the `pi -p` prompt (recorded user message), not via env/file.
+		// Chunk travels through pi's `-p @file` support, not through the environment.
 		expect(env.OM_CHUNK_PATH).toBeUndefined();
 		expect(env.OM_RESULT_PATH).toBe(runResultPath(memoryRoot, "r1"));
 		expect(env.OM_MEMORY_DIR).toBe(memoryRoot);
@@ -47,6 +59,17 @@ describe("launch argv + env", () => {
 
 	it("resolves run paths under the session memory root's .runs", () => {
 		expect(runsDir("/proj/.memory/sess-1")).toBe("/proj/.memory/sess-1/.runs");
+		expect(runPromptPath("/proj/.memory/sess-1", "r1")).toBe(
+			"/proj/.memory/sess-1/.runs/r1.prompt.md",
+		);
+	});
+
+	it("keeps an oversized prompt out of argv", () => {
+		const prompt = "x".repeat(256 * 1024);
+		const path = runPromptPath("/proj/.memory/sess-1", "huge");
+		const argv = buildWorkerArgv({ model, sessionName: "om-observer-huge", kickoffPromptPath: path });
+		expect(argv).toContain(`@${path}`);
+		expect(argv).not.toContain(prompt);
 	});
 });
 
@@ -57,6 +80,12 @@ describe("observer result IPC round-trip", () => {
 	});
 	afterEach(() => {
 		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("writes a worker prompt atomically", () => {
+		const path = runPromptPath(dir, "r");
+		writeWorkerPrompt(path, "large prompt");
+		expect(readFileSync(path, "utf-8")).toBe("large prompt");
 	});
 
 	it("writes and reads back valid observations, dropping malformed ones", () => {

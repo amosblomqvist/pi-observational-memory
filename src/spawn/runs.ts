@@ -30,6 +30,19 @@ export function runResultPath(root: string, runId: string): string {
 }
 
 /**
+ * Worker kickoff prompt. The subprocess reads this through pi's `@file` CLI support instead
+ * of receiving the potentially large transcript as one argv element (Linux caps each argument
+ * at MAX_ARG_STRLEN even when ARG_MAX is much larger).
+ */
+export function runPromptPath(root: string, runId: string): string {
+	return join(runsDir(root), `${runId}.prompt.md`);
+}
+
+export function writeWorkerPrompt(path: string, prompt: string): void {
+	atomicWrite(path, prompt);
+}
+
+/**
  * Per-run cost handoff file. Written by the worker EXTENSION (never the model) from pi's
  * built-in `usage.cost.total`, read by the orchestrator after the process exits. Uniform
  * across roles — the consolidator has no observations result file but still reports cost here.
