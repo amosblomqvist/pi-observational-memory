@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { AGENT_EXTENSION_PATH, buildWorkerArgv, buildWorkerEnv, modelArg } from "../src/spawn/launch.js";
+import { AGENT_EXTENSION_PATH, buildWorkerArgv, buildWorkerEnv, isUsageLimitFailure, modelArg } from "../src/spawn/launch.js";
 import { readObserverResult, runResultPath, runsDir, writeObserverResult } from "../src/spawn/runs.js";
 import { registerObserverTool } from "../agent/observer/tool.js";
 
@@ -32,6 +32,15 @@ describe("launch argv + env", () => {
 
 	it("formats the model arg as provider/id", () => {
 		expect(modelArg(model)).toBe("anthropic/claude-sonnet-4-6");
+		expect(modelArg({ provider: "odevo", id: "openai/gpt-6-luna", thinking: "low" })).toBe("odevo/openai/gpt-6-luna");
+	});
+
+	it("retries only failed workers with a usage-limit signal", () => {
+		expect(isUsageLimitFailure({ code: 1, signal: null, stderr: "Codex error: The usage limit has been reached" })).toBe(true);
+		expect(isUsageLimitFailure({ code: 1, signal: null, stderr: "429 quota exceeded" })).toBe(true);
+		expect(isUsageLimitFailure({ code: 1, signal: null, stderr: "API key is invalid" })).toBe(false);
+		expect(isUsageLimitFailure({ code: 0, signal: null, stderr: "usage limit" })).toBe(false);
+		expect(isUsageLimitFailure({ code: null, signal: "SIGTERM", stderr: "usage limit" })).toBe(false);
 	});
 
 	it("sets the worker IPC env vars", () => {

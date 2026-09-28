@@ -9,6 +9,11 @@ export interface ConfiguredModel {
 	thinking?: ModelThinkingLevel;
 }
 
+export interface ConfiguredObserverModel extends ConfiguredModel {
+	/** Ordered models used only when the primary observer hits a provider usage limit. */
+	fallbackModels?: ConfiguredModel[];
+}
+
 export interface Config {
 	/** Raw-history token size of one observation chunk (fixed boundary). */
 	chunkTokens: number;
@@ -31,7 +36,7 @@ export interface Config {
 	/** Max simultaneous in-flight observer subprocesses. */
 	observerConcurrency: number;
 	models: {
-		observer: ConfiguredModel;
+		observer: ConfiguredObserverModel;
 		consolidator: ConfiguredModel;
 	};
 	/**
@@ -95,6 +100,31 @@ function normalizeModel(value: unknown, fallback: ConfiguredModel): ConfiguredMo
 	return model;
 }
 
+export function normalizeObserverModel(value: Record<string, unknown>, fallback: ConfiguredObserverModel): ConfiguredObserverModel {
+	const model = normalizeModel(value, fallback);
+	if (!Array.isArray(value.fallbackModels)) return model;
+
+	const seen = new Set([`${model.provider}/${model.id}`]);
+	const fallbackModels: ConfiguredModel[] = [];
+	for (const candidate of value.fallbackModels) {
+		if (!isRecord(candidate)) continue;
+		const provider = nonEmptyString(candidate.provider);
+		const id = nonEmptyString(candidate.id);
+		if (!provider || !id) continue;
+		const key = `${provider}/${id}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		const normalized: ConfiguredModel = { provider, id };
+		const thinking = isThinkingLevel(candidate.thinking) ? candidate.thinking : undefined;
+		if (thinking) normalized.thinking = thinking;
+		fallbackModels.push(normalized);
+	}
+	const normalized: ConfiguredObserverModel = { provider: model.provider, id: model.id };
+	if (model.thinking) normalized.thinking = model.thinking;
+	if (fallbackModels.length > 0) normalized.fallbackModels = fallbackModels;
+	return normalized;
+}
+
 function normalizeSettingsConfig(value: Record<string, unknown>, base: Config): Partial<Config> {
 	const normalized: Partial<Config> = {};
 	const numberKeys = [
@@ -119,7 +149,9 @@ function normalizeSettingsConfig(value: Record<string, unknown>, base: Config): 
 	if (typeof value.debugLog === "boolean") normalized.debugLog = value.debugLog;
 	if (isRecord(value.models)) {
 		normalized.models = {
-			observer: normalizeModel(value.models.observer, base.models.observer),
+			observer: isRecord(value.models.observer)
+				? normalizeObserverModel(value.models.observer, base.models.observer)
+				: base.models.observer,
 			consolidator: normalizeModel(value.models.consolidator, base.models.consolidator),
 		};
 	}

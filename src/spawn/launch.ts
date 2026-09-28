@@ -63,6 +63,11 @@ export function buildWorkerArgv(opts: {
 
 export type WorkerExit = { code: number | null; signal: NodeJS.Signals | null; stderr: string };
 
+/** Only provider quota/rate-limit failures trigger an alternate observer model. */
+export function isUsageLimitFailure(exit: WorkerExit): boolean {
+	return exit.code !== null && exit.code !== 0 && /usage\s+limit|quota|rate\s*limit|too many requests|\b429\b/i.test(exit.stderr);
+}
+
 /**
  * Spawn a headless worker; resolve when it exits. Workers run in their master session's
  * `.memory/<sessionId>/` root (not the project cwd) so pi keys the run into a distinct global

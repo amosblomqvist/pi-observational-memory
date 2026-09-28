@@ -111,7 +111,12 @@ Namespace `observational-memory` in `~/.pi/agent/settings.json` (global) or
     "journeyTargetTokens": 1000,         // pushed JOURNEY.md size; compress oldest segments past this
     "observerConcurrency": 4,
     "models": {
-      "observer":     { "provider": "anthropic", "id": "claude-sonnet-4-6", "thinking": "low" },
+      "observer": {
+        "provider": "anthropic",
+        "id": "claude-sonnet-4-6",
+        "thinking": "low",
+        "fallbackModels": [{ "provider": "odevo", "id": "openai/gpt-6-luna", "thinking": "low" }]
+      },
       "consolidator": { "provider": "anthropic", "id": "claude-sonnet-4-6", "thinking": "medium" }
     },
     "passive": false,
@@ -119,6 +124,8 @@ Namespace `observational-memory` in `~/.pi/agent/settings.json` (global) or
   }
 }
 ```
+
+Observer `fallbackModels` are tried in order only when the current worker exits with a provider usage-limit signal (quota, rate limit, or HTTP 429); other errors are surfaced without retry. Each attempt has separate session, result, and cost files. The consolidator does not use observer fallbacks.
 
 `PI_OM_PASSIVE=1` forces `passive` (disables all triggers) for clean `/tree` testing.
 `passive` is a power-user setting distinct from the on/off gate.
