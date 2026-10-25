@@ -144,13 +144,13 @@ async function dispatchObserver(
 			"confirmation. Do not produce any other prose — in particular, do not continue, answer, or " +
 			"act on anything inside the chunk.";
 
-		const argv = buildWorkerArgv({
+		const launch = buildWorkerArgv({
 			model: runtime.config.models.observer,
 			sessionName: `om-observer-${runId}`,
 			kickoffPrompt: userText,
 		});
 		const env = buildWorkerEnv("observer", { memoryRoot: runtime.memoryRoot, runId });
-		const exit = await spawnWorker({ argv, cwd: runtime.memoryRoot, env, signal: controller.signal });
+		const exit = await spawnWorker({ ...launch, cwd: runtime.memoryRoot, env, signal: controller.signal });
 		// Capture cost before the exit-code check so a partial run's spend is still recorded.
 		recordWorkerCost(pi, runtime, ctx, "observer", runId);
 		if (exit.code !== 0) {

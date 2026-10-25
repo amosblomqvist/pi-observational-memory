@@ -6,10 +6,11 @@
  * spawn a plain headless `pi` with no `--session-dir`, so the run is recorded under the
  * project path in `~/.pi/agent/sessions` and is openable in the session browser.
  */
-import { spawn } from "node:child_process";
-import { mkdirSync, realpathSync } from "node:fs";
+import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
+import * as piPackage from "@earendil-works/pi-coding-agent";
 import type { ConfiguredModel } from "../config.js";
 import { runCostPath, runResultPath } from "./runs.js";
 
@@ -21,28 +22,62 @@ export function modelArg(model: ConfiguredModel): string {
 	return `${model.provider}/${model.id}`;
 }
 
-/** Resolve the `pi` entry point (subagents' trick), falling back to `pi` on PATH. */
-export function resolvePiBinary(): { command: string; baseArgs: string[] } {
-	const entry = process.argv[1];
-	if (entry) {
+type PiBinary = { command: string; baseArgs: string[]; shell?: boolean };
+
+/** The host's own pi package dir: `getPackageDir()` when this pi version exports it, else walk up from the resolved entry. */
+function findPiPackageDir(): string | undefined {
+	try {
+		const getDir = (piPackage as { getPackageDir?: () => string }).getPackageDir;
+		if (typeof getDir === "function") return getDir();
+	} catch {
+		// fall through
+	}
+	try {
+		let dir = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")));
+		for (;;) {
+			const pkgPath = join(dir, "package.json");
+			if (existsSync(pkgPath) && JSON.parse(readFileSync(pkgPath, "utf8")).name === "@earendil-works/pi-coding-agent") return dir;
+			const parent = dirname(dir);
+			if (parent === dir) return undefined;
+			dir = parent;
+		}
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Resolve the `pi` CLI: the host's own pi package `bin` first (works under any host that embeds pi
+ * via the SDK, e.g. a Next.js server whose argv[1] is not pi), then `pi` on PATH. On Windows `pi` is
+ * `pi.cmd`, which spawn can only run through a shell; safe there because the prompt now goes via
+ * stdin, so argv holds only fixed flags and model/session names.
+ */
+export function resolvePiBinary(): PiBinary {
+	const dir = findPiPackageDir();
+	if (dir) {
 		try {
-			const realEntry = realpathSync(entry);
-			if (/\.(?:mjs|cjs|js)$/i.test(realEntry)) {
-				return { command: process.execPath, baseArgs: [realEntry] };
+			const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
+			const bin = typeof pkg.bin === "string" ? pkg.bin : pkg.bin?.pi;
+			if (bin) {
+				const cli = resolve(dir, bin);
+				if (existsSync(cli)) return { command: process.execPath, baseArgs: [realpathSync(cli)] };
 			}
 		} catch {
 			// fall through
 		}
 	}
-	return { command: "pi", baseArgs: [] };
+	return { command: "pi", baseArgs: [], shell: process.platform === "win32" };
 }
 
+export type WorkerLaunch = { argv: string[]; stdin: string; shell: boolean };
+
+/** The prompt travels on the child's stdin (pi uses piped stdin as the initial message under `-p`): a ~10k-token chunk in argv exceeds the Windows command-line limit. */
 export function buildWorkerArgv(opts: {
 	model: ConfiguredModel;
 	sessionName: string;
 	kickoffPrompt: string;
 	agentExtensionPath?: string;
-}): string[] {
+}): WorkerLaunch {
 	const pi = resolvePiBinary();
 	const args = [
 		...pi.baseArgs,
@@ -57,8 +92,8 @@ export function buildWorkerArgv(opts: {
 	if (opts.model.thinking) args.push("--thinking", opts.model.thinking);
 	args.push("-e", opts.agentExtensionPath ?? AGENT_EXTENSION_PATH);
 	args.push("-n", opts.sessionName);
-	args.push("-p", opts.kickoffPrompt);
-	return [pi.command, ...args];
+	args.push("-p");
+	return { argv: [pi.command, ...args], stdin: opts.kickoffPrompt, shell: pi.shell ?? false };
 }
 
 export type WorkerExit = { code: number | null; signal: NodeJS.Signals | null; stderr: string };
@@ -72,6 +107,9 @@ export type WorkerExit = { code: number | null; signal: NodeJS.Signals | null; s
  */
 export function spawnWorker(opts: {
 	argv: string[];
+	/** Prompt written to the child's stdin. */
+	stdin: string;
+	shell?: boolean;
 	cwd: string;
 	env: NodeJS.ProcessEnv;
 	signal?: AbortSignal;
@@ -79,16 +117,27 @@ export function spawnWorker(opts: {
 	const [command, ...rest] = opts.argv;
 	mkdirSync(opts.cwd, { recursive: true });
 	return new Promise<WorkerExit>((resolvePromise) => {
-		const proc = spawn(command, rest, {
-			cwd: opts.cwd,
-			env: opts.env,
-			stdio: ["ignore", "ignore", "pipe"],
-		});
+		let proc: ChildProcess;
+		try {
+			proc = spawn(command, rest, {
+				cwd: opts.cwd,
+				env: opts.env,
+				shell: opts.shell,
+				stdio: ["pipe", "ignore", "pipe"],
+			});
+		} catch (err) {
+			resolvePromise({ code: 1, signal: null, stderr: `spawn error: ${(err as Error).message}` });
+			return;
+		}
 		let stderr = "";
 		proc.stderr?.on("data", (d: Buffer) => {
 			stderr += d.toString();
 		});
-		proc.on("error", () => resolvePromise({ code: 1, signal: null, stderr: stderr || "spawn error" }));
+		proc.stdin?.on("error", () => {
+			// EPIPE: the child exited before reading its prompt; the close/error handlers report it.
+		});
+		proc.stdin?.end(opts.stdin);
+		proc.on("error", (err) => resolvePromise({ code: 1, signal: null, stderr: stderr || `spawn error: ${err.message}` }));
 		proc.on("close", (code, signal) => resolvePromise({ code, signal, stderr }));
 
 		if (opts.signal) {
@@ -112,7 +161,7 @@ export type ObserverLaunchEnv = {
 
 /**
  * Build the env a worker subprocess needs to write its result file. The chunk itself is NOT
- * passed via env/file — it is the `pi -p` prompt (recorded user message) so the run stays
+ * passed via env/file — it is the worker's stdin prompt (recorded user message) so the run stays
  * faithfully inspectable on resume.
  */
 export function buildWorkerEnv(role: "observer" | "consolidator", opts: ObserverLaunchEnv): NodeJS.ProcessEnv {
