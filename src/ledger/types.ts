@@ -22,6 +22,11 @@ export const OM_ENABLED = "om.enabled";
  */
 export const OM_COST = "om.cost";
 /**
+ * Persistent record of a failed worker run (`{ role, runId, message }`), appended by the
+ * orchestrator so failures survive beyond the transient UI toast. Not a source entry.
+ */
+export const OM_WORKER_FAILED = "om.worker.failed";
+/**
  * Synthetic continuation message used to resume the agent loop after a mid-run compaction
  * (a `turn_end` that was NOT the run's terminal turn). Carried as a `role: "custom"` message
  * with `display: false` so it is hidden from the human TUI; pi still surfaces it to the model

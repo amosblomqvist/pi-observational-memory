@@ -32,7 +32,7 @@ import { renderIndexFile } from "../memory/index-render.js";
 import { atomicWrite, indexPath, listTopics, readJourney } from "../memory/paths.js";
 import type { Runtime } from "../runtime.js";
 import { buildWorkerArgv, buildWorkerEnv, spawnWorker } from "../spawn/launch.js";
-import { recordWorkerCost } from "./observer-trigger.js";
+import { recordWorkerCost, recordWorkerFailure } from "./observer-trigger.js";
 
 type TriggerCtx = {
 	hasUI: boolean;
@@ -150,6 +150,7 @@ async function dispatchConsolidator(
 		const message = error instanceof Error ? error.message : String(error);
 		runtime.lastWorkerError = message;
 		runtime.status.workerError(runId);
+		recordWorkerFailure(pi, runtime, "consolidator", runId, message);
 		if (ctx.hasUI) ctx.ui?.notify(`om: consolidator failed: ${message}`, "error");
 	} finally {
 		runtime.consolidatorController = undefined;

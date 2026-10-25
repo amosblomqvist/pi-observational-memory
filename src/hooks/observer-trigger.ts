@@ -1,4 +1,6 @@
+import { basename } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { debugLog, withDebugLogContext } from "../debug-log.js";
 import { assignObservationTimestamps } from "../ids.js";
 import {
 	entryIndexForId,
@@ -10,6 +12,7 @@ import {
 	serializeSourceAddressedBranchEntries,
 	OM_COST,
 	OM_OBSERVATIONS_RECORDED,
+	OM_WORKER_FAILED,
 	type Entry,
 	type SourceSlice,
 } from "../ledger/index.js";
@@ -41,6 +44,27 @@ export function recordWorkerCost(
 	if (!cost) return;
 	pi.appendEntry(OM_COST, { costUsd: cost.costUsd, role, runId });
 	runtime.refreshCost(ctx.sessionManager.getEntries());
+}
+
+/**
+ * Record a failed worker run beyond the toast: an `om.worker.failed` session entry (always) and
+ * a `worker.failed` debug-log line (when `debugLog` is on). Best-effort; never throws.
+ */
+export function recordWorkerFailure(
+	pi: ExtensionAPI,
+	runtime: Runtime,
+	role: "observer" | "consolidator",
+	runId: string,
+	message: string,
+): void {
+	try {
+		pi.appendEntry(OM_WORKER_FAILED, { role, runId, message: message.slice(0, 2000) });
+	} catch {
+		// The session may be tearing down; the debug log below still records it.
+	}
+	withDebugLogContext({ enabled: runtime.config.debugLog, sessionId: basename(runtime.memoryRoot), runId }, () =>
+		debugLog("worker.failed", { role, message }),
+	);
 }
 
 function nextRunId(): string {
@@ -183,6 +207,7 @@ async function dispatchObserver(
 		const message = error instanceof Error ? error.message : String(error);
 		runtime.lastWorkerError = message;
 		runtime.status.workerError(runId);
+		recordWorkerFailure(pi, runtime, "observer", runId, message);
 		// Errors bypass the coalescer: they use a different display level and
 		// should never be merged with info lines.
 		if (ctx.hasUI) ctx.ui?.notify(`om: observer failed: ${message}`, "error");

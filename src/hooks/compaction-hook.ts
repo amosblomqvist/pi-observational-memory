@@ -1,4 +1,6 @@
+import { basename } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { debugLog, withDebugLogContext } from "../debug-log.js";
 import { renderMemoryMap } from "../memory/index-render.js";
 import { listTopics, readJourney } from "../memory/paths.js";
 import type { Runtime } from "../runtime.js";
@@ -153,6 +155,17 @@ export function registerCompactionHook(pi: ExtensionAPI, runtime: Runtime): void
 			const journey = readJourney(runtime.memoryRoot);
 			const map = renderMemoryMap(listTopics(runtime.memoryRoot));
 			const summary = renderSummary(journey, map, projection.observations);
+
+			// Nothing to render (no observations, journey, or memory map — e.g. every observer
+			// failed). An empty summary would wipe the model's context, so decline and let pi run
+			// its built-in summarising compaction instead (returning no `compaction` does that).
+			if (summary.trim().length === 0) {
+				withDebugLogContext({ enabled: runtime.config.debugLog, sessionId: basename(runtime.memoryRoot) }, () =>
+					debugLog("compaction.fallback", { reason: "empty-summary", proposedFirstKeptEntryId: firstKeptEntryId, tokensBefore }),
+				);
+				if (hasUI) ctx.ui.notify("om: no memory recorded yet — using pi's built-in compaction", "warning");
+				return undefined;
+			}
 
 			return {
 				compaction: {
